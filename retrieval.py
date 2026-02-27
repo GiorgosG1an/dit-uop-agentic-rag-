@@ -1,6 +1,7 @@
 import asyncio
 import os
 from dotenv import load_dotenv
+from typing import List, Optional
 
 from llama_index.core import VectorStoreIndex, Settings, PromptTemplate
 from llama_index.core.vector_stores.types import MetadataInfo, VectorStoreInfo
@@ -10,8 +11,12 @@ from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.tools import QueryEngineTool, ToolMetadata
 from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
 from llama_index.core.agent.workflow import FunctionAgent
+from llama_index.core.tools import FunctionTool
 from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
+from llama_index.core.schema import NodeWithScore
+from llama_index.core import QueryBundle
 
 from setup_qdrant import get_vector_store
 
@@ -30,6 +35,41 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+class FullCourseContextPostProcessor(BaseNodePostprocessor):
+    """
+    Small-to-Big Retrieval PostProcessor.
+
+    Replaces retrieved small chunks with the full course content stored in metadata,
+    and deduplicates so the LLM doesn't receive the same course multiple times.
+    """
+    def _postprocess_nodes(
+        self, nodes: List[NodeWithScore], query_bundle: Optional[QueryBundle] = None
+    ) -> List[NodeWithScore]:
+        unique_doc_ids = set()
+        new_nodes = []
+        
+        for node_with_score in nodes:
+            # ref_doc_id is the unique ID of the parent Document
+            doc_id = node_with_score.node.ref_doc_id
+            
+            if doc_id not in unique_doc_ids:
+                unique_doc_ids.add(doc_id)
+                
+                # Fetch the full content we stored during ingestion
+                full_content = node_with_score.node.metadata.get("full_content")
+                
+                if full_content:
+                    # Create a copy to avoid mutating cached nodes
+                    node_copy = node_with_score.node.model_copy()
+                    node_copy.text = full_content 
+                    new_nodes.append(NodeWithScore(node=node_copy, score=node_with_score.score))
+                else:
+                    new_nodes.append(node_with_score)
+                    
+        return new_nodes
+    
+full_course_postprocessor = FullCourseContextPostProcessor()
 
 # Describe the metadata schema for the LLM
 vector_store_info = VectorStoreInfo(
@@ -94,7 +134,7 @@ Settings.embed_model = embed_model
 reranker = FlagEmbeddingReranker(
     top_n=5,
     model="BAAI/bge-reranker-v2-m3",
-    use_fp16=True,
+    use_fp16=False, # this set at True caused problem `expected scalar type Float but found Half`
 )
 
 vector_store = get_vector_store()
@@ -114,7 +154,7 @@ retriever = VectorIndexAutoRetriever(
 
 query_engine = RetrieverQueryEngine.from_args(
     retriever=retriever,
-    node_postprocessors=[reranker],
+    node_postprocessors=[reranker, full_course_postprocessor],
     llm=llm,
 )
 
@@ -139,34 +179,40 @@ qa_prompt_tmpl_str = (
 qa_prompt_tmpl = PromptTemplate(qa_prompt_tmpl_str)
 semantic_query_engine = RetrieverQueryEngine.from_args(
     retriever=semantic_retriever,
-    node_postprocessors=[reranker],
+    node_postprocessors=[reranker, full_course_postprocessor],
     llm=llm,
     text_qa_template=qa_prompt_tmpl,
 )
 
-semantic_search_tool = QueryEngineTool(
-    query_engine=semantic_query_engine,
-    metadata=ToolMetadata(
-        name="semantic_course_search",
-        description=(
-            "Use this tool to search for course concepts, syllabus details, learning outcomes, "
-            "or what a student will learn in a specific field. "
-            "Best for open-ended or conceptual questions like 'What will I learn in Machine Learning?'"
-        )
+# Lock for not parallel tool call
+search_lock = asyncio.Lock()
+async def safe_semantic_search(input: str):
+    async with search_lock:
+        response = await semantic_query_engine.aquery(input)
+        return str(response)
+
+semantic_search_tool = FunctionTool.from_defaults(
+    async_fn=safe_semantic_search,
+    name="semantic_course_search",
+    description=(
+        "Main tool, always use it if you are not sure if it needed to be called."
+        "Use this tool to search for course concepts, syllabus details, learning outcomes, "
+        "or what a student will learn in a specific field. "
+        "Best for open-ended or conceptual questions like 'What will I learn in Machine Learning?'"
     )
 )
 
-filtered_search_tool = QueryEngineTool(
-    query_engine=query_engine, 
-    metadata=ToolMetadata(
-        name="filtered_course_search",
-        description=(
-            "Use this tool ONLY when the user explicitly asks to filter by "
-            "semester, ECTS, difficulty, season, or prerequisites. "
-            "Do NOT use this for general questions about course content."
-        )
-    )
-)
+# filtered_search_tool = QueryEngineTool(
+#     query_engine=query_engine, 
+#     metadata=ToolMetadata(
+#         name="filtered_course_search",
+#         description=(
+#             "Use this tool ONLY when the user explicitly asks to filter by "
+#             "semester, ECTS, difficulty, season, or prerequisites. "
+#             "Do NOT use this for general questions about course content."
+#         )
+#     )
+# )
 
 advisor_system_prompt = """
 Είστε ο επίσημος Ψηφιακός Ακαδημαϊκός Σύμβουλος (AI) του Τμήματος Πληροφορικής και Τηλεπικοινωνιών του Πανεπιστημίου Πελοποννήσου.
@@ -190,7 +236,7 @@ agent = FunctionAgent(
     name="DIT_Advisor",
     description="Official Academic Advisor AI for the Informatics Department.",
     system_prompt=advisor_system_prompt,
-    tools=[semantic_search_tool, filtered_search_tool],
+    tools=[semantic_search_tool],
     llm=llm,
 )
 
