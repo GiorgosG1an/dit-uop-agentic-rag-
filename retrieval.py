@@ -121,7 +121,7 @@ vector_store_info = VectorStoreInfo(
 llm = GoogleGenAI(
     model="gemini-2.0-flash",
     api_key=GOOGLE_API_KEY,
-    temperature=0
+    temperature=0.1
 )
 Settings.llm = llm
 
@@ -242,7 +242,7 @@ agent = FunctionAgent(
 
 async def chat_loop():
     print("==================================================")
-    print("🎓 DIT UoP Academic Advisor AI (Workflow Mode)")
+    print("DIT UoP Academic Advisor AI (Workflow Mode)")
     print("Type 'exit' or 'quit' to terminate the session.")
     print("==================================================")
     
