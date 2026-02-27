@@ -93,7 +93,7 @@ Settings.embed_model = embed_model
 
 reranker = FlagEmbeddingReranker(
     top_n=5,
-    model="BAAI/bge-reranker-base",
+    model="BAAI/bge-reranker-v2-m3",
     use_fp16=True,
 )
 
@@ -114,6 +114,7 @@ retriever = VectorIndexAutoRetriever(
 
 query_engine = RetrieverQueryEngine.from_args(
     retriever=retriever,
+    node_postprocessors=[reranker],
     llm=llm,
 )
 
@@ -121,7 +122,7 @@ semantic_retriever = VectorIndexRetriever(
     index=index,
     similarity_top_k=15,
     vector_store_query_mode=VectorStoreQueryMode.HYBRID,
-    alpha=0.5,
+    alpha=0.7,
 )
 
 qa_prompt_tmpl_str = (
