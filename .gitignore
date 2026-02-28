@@ -227,3 +227,6 @@ __marimo__/
 *.vsix
 
 .vscode/settings.json
+
+core_courses/
+eval_courses/

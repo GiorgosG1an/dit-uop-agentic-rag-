@@ -22,11 +22,15 @@ for file_path in glob.glob(os.path.join(docs_path, "*.md")):
     
     document = Document(
         text=post.content,
-        metadata=metadata,
+        metadata={
+            **metadata,
+            "full_content": post.content
+        },
         metadata_separator="\n",
         metadata_template="{key}=>{value}",
         text_template="Metadata:\n{metadata_str}\n\nContent:\n{content}",
-        excluded_llm_metadata_keys=["unlocked_concepts", "keywords", "skills_acquired", "course_code"]
+        excluded_llm_metadata_keys=["unlocked_concepts", "keywords", "skills_acquired", "course_code", "full_content"],
+        excluded_embed_metadata_keys=["full_content"],
     )
     documents.append(document)
 
