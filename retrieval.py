@@ -162,7 +162,7 @@ semantic_retriever = VectorIndexRetriever(
     index=index,
     similarity_top_k=15,
     vector_store_query_mode=VectorStoreQueryMode.HYBRID,
-    alpha=0.7,
+    alpha=0.6,
 )
 
 qa_prompt_tmpl_str = (
@@ -195,24 +195,29 @@ semantic_search_tool = FunctionTool.from_defaults(
     async_fn=safe_semantic_search,
     name="semantic_course_search",
     description=(
-        "Main tool, always use it if you are not sure if it needed to be called."
-        "Use this tool to search for course concepts, syllabus details, learning outcomes, "
-        "or what a student will learn in a specific field. "
-        "Best for open-ended or conceptual questions like 'What will I learn in Machine Learning?'"
+        "Use this tool for general, open-ended or conceptual questions about courses, "
+        "such as 'What courses are related to Artificial Intelligence?', "
+        "'Which courses cover Machine Learning topics?', "
+        "'Give me an overview of AI-related courses in the department'. "
+        "It searches broadly across all course materials and returns relevant results. "
+        "ALWAYS use this as the primary tool for broad topic questions."
     )
 )
 
-# filtered_search_tool = QueryEngineTool(
-#     query_engine=query_engine, 
-#     metadata=ToolMetadata(
-#         name="filtered_course_search",
-#         description=(
-#             "Use this tool ONLY when the user explicitly asks to filter by "
-#             "semester, ECTS, difficulty, season, or prerequisites. "
-#             "Do NOT use this for general questions about course content."
-#         )
-#     )
-# )
+filtered_search_tool = QueryEngineTool(
+    query_engine=query_engine, # This uses your VectorIndexAutoRetriever
+    metadata=ToolMetadata(
+        name="filtered_course_search",
+        description=(
+            "MANDATORY TOOL for any query containing specific constraints. "
+            "Use this tool ONLY when the user asks to filter courses by exact parameters: "
+            "semester (e.g., 6th), ECTS credits (e.g., 5), difficulty (e.g., 'Advanced'), "
+            "season (e.g., 'Εαρινό'), or specific prerequisites. "
+            "Do NOT use this for general conceptual questions."
+            "Additionally useful when you need to narrow down results by specific criteria AFTER an initial broad search."
+        )
+    )
+)
 
 advisor_system_prompt = """
 Είστε ο επίσημος Ψηφιακός Ακαδημαϊκός Σύμβουλος (AI) του Τμήματος Πληροφορικής και Τηλεπικοινωνιών του Πανεπιστημίου Πελοποννήσου.
@@ -225,18 +230,25 @@ advisor_system_prompt = """
 - Όταν συγκρίνετε μαθήματα ή παρουσιάζετε προαπαιτούμενα και ECTS, χρησιμοποιήστε **Πίνακες (Tables)** για μέγιστη σαφήνεια.
 - Διαχωρίστε τις θεματικές ενότητες με οριζόντιες γραμμές (---).
 
+ΚΡΙΤΗΡΙΑ ΧΡΗΣΗΣ ΕΡΓΑΛΕΙΩΝ (CRITICAL TOOL RULES):
+- ΠΡΕΠΕΙ ΠΑΝΤΑ (MUST ALWAYS) να καλείτε το εργαλείο `semantic_course_search` για να αντλήσετε πληροφορίες σχετικά με τα μαθήματα, την ύλη, και το τμήμα πριν απαντήσετε.
+- ΑΠΑΓΟΡΕΥΕΤΑΙ να απαντάτε από μνήμης (do not use internal knowledge) για ακαδημαϊκά θέματα. 
+- Εάν το εργαλείο δεν επιστρέψει πληροφορίες, ΠΡΕΠΕΙ να παραδεχτείτε ότι δεν γνωρίζετε την απάντηση και να παραπέμψετε στον επίσημο οδηγό σπουδών (PDF).
+
 ΟΔΗΓΙΕΣ ΠΕΡΙΕΧΟΜΕΝΟΥ:
-- Να είστε επαγγελματίας, ενθαρρυντικός και αυστηρά αντικειμενικός.
+- Να είστε επαγγελματίας, ενθαρρυντικός, πρόθυμος για βοήθεια και αυστηρά αντικειμενικός.
 - Εάν δεν γνωρίζετε την απάντηση, παραδεχτείτε το και προτείνετε τον επίσημο οδηγό σπουδών (PDF).
 - Αναλύστε διεξοδικά τεχνολογίες και έννοιες (όχι μόνο keywords).
 - Αναφέρετε πάντα τα προαπαιτούμενα για τεχνικές κατευθύνσεις.
 - Απαντάτε πάντα στη γλώσσα του φοιτητή (Ελληνικά ή Αγγλικά).
+- Όταν η ερώτηση αφορά **γενικά πεδία / κατευθύνσεις** (π.χ. Τεχνητή Νοημοσύνη, Δίκτυα, Προγραμματισμός), **πάντα** ψάξε για **όλα τα σχετικά μαθήματα** και **λίσταρέ τα** με σύντομη περιγραφή, ακόμα κι αν χρειαστεί να κάνεις πολλαπλά queries ή να χρησιμοποιήσεις και τα δύο tools.
+- Μην περιορίζεσαι σε 1–2 μαθήματα — στόχος είναι **πλήρης εικόνα** του τι προσφέρει το τμήμα στο συγκεκριμένο πεδίο.
 """
 agent = FunctionAgent(
     name="DIT_Advisor",
     description="Official Academic Advisor AI for the Informatics Department.",
     system_prompt=advisor_system_prompt,
-    tools=[semantic_search_tool],
+    tools=[semantic_search_tool, filtered_search_tool],
     llm=llm,
 )
 
