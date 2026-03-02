@@ -39,9 +39,9 @@ else:
     print(f"Collection {COLLECTION_NAME} already exists")
 
 
-# Numeric Indexes
-client.create_payload_index(COLLECTION_NAME, "semester", field_schema=models.PayloadSchemaType.INTEGER)
-client.create_payload_index(COLLECTION_NAME, "ects", field_schema=models.PayloadSchemaType.INTEGER)
+
+client.create_payload_index(COLLECTION_NAME, "semester", field_schema=models.PayloadSchemaType.KEYWORD)
+client.create_payload_index(COLLECTION_NAME, "ects", field_schema=models.PayloadSchemaType.KEYWORD)
 
 # Categorical Indexes
 client.create_payload_index(COLLECTION_NAME, "difficulty", field_schema=models.PayloadSchemaType.KEYWORD)
@@ -56,4 +56,38 @@ client.create_payload_index(COLLECTION_NAME, "keywords", field_schema=models.Pay
 
 def get_vector_store() -> QdrantVectorStore:
     return vector_store
+
+if __name__ == "__main__":
+    points, next_page = client.scroll(
+        collection_name=COLLECTION_NAME,
+        with_payload=True,
+        limit=5000,
+    )
+
+    for point in points:
+        current_semester = point.payload.get("semester")
+        current_ects = point.payload.get("ects")
+
+        if isinstance(current_semester, int):
+            new_payload = point.payload.copy()
+            new_payload["semester"] = str(current_semester) # Cast to string
+            
+            client.set_payload(
+                collection_name=COLLECTION_NAME,
+                payload=new_payload,
+                points=[point.id],
+                wait=True
+            )
+            print(f"Updated Course {point.payload.get('course_id')} to semester string '{new_payload['semester']}'")
         
+        if isinstance(current_ects, int):
+            new_payload = point.payload.copy()
+            new_payload["ects"] = str(current_ects)
+            
+            client.set_payload(
+                collection_name=COLLECTION_NAME,
+                payload=new_payload,
+                points=[point.id],
+                wait=True
+            )
+            print(f"Updated Course {point.payload.get('course_id')} to ects string '{new_payload['ects']}'")
