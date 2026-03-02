@@ -8,15 +8,13 @@ from llama_index.core.vector_stores.types import MetadataInfo, VectorStoreInfo
 from llama_index.core.retrievers import VectorIndexAutoRetriever, VectorIndexRetriever
 from llama_index.core.vector_stores.types import VectorStoreQueryMode
 from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.core.tools import QueryEngineTool, ToolMetadata
 from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
-from llama_index.core.agent.workflow import FunctionAgent
-from llama_index.core.tools import FunctionTool
 from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import NodeWithScore
 from llama_index.core import QueryBundle
+
 
 from setup_qdrant import get_vector_store
 
@@ -25,12 +23,12 @@ import sys
 from llama_index.core import set_global_handler
 
 set_global_handler("simple")
-logging.basicConfig(
-    stream=sys.stdout, 
-    level=logging.INFO, 
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# logging.basicConfig(
+#     stream=sys.stdout, 
+#     level=logging.INFO, 
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# )
+# logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 load_dotenv()
@@ -77,12 +75,12 @@ vector_store_info = VectorStoreInfo(
     metadata_info=[
         MetadataInfo(
             name="semester", 
-            type="integer", 
-            description="The semester the course is taught (e.g., 1 through 8)"
+            type="string", 
+            description="The semester the course is taught (e.g., 1 through 8)."
         ),
         MetadataInfo(
             name="ects", 
-            type="integer", 
+            type="string", 
             description="European Credit Transfer System points (e.g., 5 or 6)"
         ),
         MetadataInfo(
@@ -103,7 +101,7 @@ vector_store_info = VectorStoreInfo(
         MetadataInfo(
             name="instructors", 
             type="list[string]", 
-            description="List of professor last names teaching the course"
+            description="List of professor last names teaching the course, it may be blank"
         ),
         MetadataInfo(
             name="career_paths", 
@@ -148,13 +146,12 @@ retriever = VectorIndexAutoRetriever(
     vector_store_info=vector_store_info,
     llm=llm,
     similarity_top_k=15,
-    empty_query_is_text_all=True,
     vector_store_query_mode=VectorStoreQueryMode.HYBRID,
 )
 
 query_engine = RetrieverQueryEngine.from_args(
     retriever=retriever,
-    node_postprocessors=[reranker, full_course_postprocessor],
+    node_postprocessors=[full_course_postprocessor], # removed reranker
     llm=llm,
 )
 
@@ -183,104 +180,3 @@ semantic_query_engine = RetrieverQueryEngine.from_args(
     llm=llm,
     text_qa_template=qa_prompt_tmpl,
 )
-
-# Lock for not parallel tool call
-search_lock = asyncio.Lock()
-async def safe_semantic_search(input: str):
-    async with search_lock:
-        response = await semantic_query_engine.aquery(input)
-        return str(response)
-
-semantic_search_tool = FunctionTool.from_defaults(
-    async_fn=safe_semantic_search,
-    name="semantic_course_search",
-    description=(
-        "Use this tool for general, open-ended or conceptual questions about courses, "
-        "such as 'What courses are related to Artificial Intelligence?', "
-        "'Which courses cover Machine Learning topics?', "
-        "'Give me an overview of AI-related courses in the department'. "
-        "It searches broadly across all course materials and returns relevant results. "
-        "ALWAYS use this as the primary tool for broad topic questions."
-    )
-)
-
-filtered_search_tool = QueryEngineTool(
-    query_engine=query_engine, # This uses your VectorIndexAutoRetriever
-    metadata=ToolMetadata(
-        name="filtered_course_search",
-        description=(
-            "MANDATORY TOOL for any query containing specific constraints. "
-            "Use this tool ONLY when the user asks to filter courses by exact parameters: "
-            "semester (e.g., 6th), ECTS credits (e.g., 5), difficulty (e.g., 'Advanced'), "
-            "season (e.g., 'Εαρινό'), or specific prerequisites. "
-            "Do NOT use this for general conceptual questions."
-            "Additionally useful when you need to narrow down results by specific criteria AFTER an initial broad search."
-        )
-    )
-)
-
-advisor_system_prompt = """
-Είστε ο επίσημος Ψηφιακός Ακαδημαϊκός Σύμβουλος (AI) του Τμήματος Πληροφορικής και Τηλεπικοινωνιών του Πανεπιστημίου Πελοποννήσου.
-Ο ρόλος σας είναι να καθοδηγείτε τους φοιτητές στην ακαδημαϊκή τους πορεία.
-
-ΚΑΝΟΝΕΣ ΜΟΡΦΟΠΟΙΗΣΗΣ:
-- Χρησιμοποιήστε **Επικεφαλίδες (##)** για να διαχωρίζετε τις ενότητες της απάντησης.
-- Χρησιμοποιήστε **Bold (έντονη γραφή)** για σημαντικούς όρους, κωδικούς μαθημάτων και ονόματα τεχνολογιών.
-- Χρησιμοποιήστε **Bullet points (-)** για την ανάλυση της ύλης και των αλγορίθμων.
-- Όταν συγκρίνετε μαθήματα ή παρουσιάζετε προαπαιτούμενα και ECTS, χρησιμοποιήστε **Πίνακες (Tables)** για μέγιστη σαφήνεια.
-- Διαχωρίστε τις θεματικές ενότητες με οριζόντιες γραμμές (---).
-
-ΚΡΙΤΗΡΙΑ ΧΡΗΣΗΣ ΕΡΓΑΛΕΙΩΝ (CRITICAL TOOL RULES):
-- ΠΡΕΠΕΙ ΠΑΝΤΑ (MUST ALWAYS) να καλείτε το εργαλείο `semantic_course_search` για να αντλήσετε πληροφορίες σχετικά με τα μαθήματα, την ύλη, και το τμήμα πριν απαντήσετε.
-- ΑΠΑΓΟΡΕΥΕΤΑΙ να απαντάτε από μνήμης (do not use internal knowledge) για ακαδημαϊκά θέματα. 
-- Εάν το εργαλείο δεν επιστρέψει πληροφορίες, ΠΡΕΠΕΙ να παραδεχτείτε ότι δεν γνωρίζετε την απάντηση και να παραπέμψετε στον επίσημο οδηγό σπουδών (PDF).
-
-ΟΔΗΓΙΕΣ ΠΕΡΙΕΧΟΜΕΝΟΥ:
-- Να είστε επαγγελματίας, ενθαρρυντικός, πρόθυμος για βοήθεια και αυστηρά αντικειμενικός.
-- Εάν δεν γνωρίζετε την απάντηση, παραδεχτείτε το και προτείνετε τον επίσημο οδηγό σπουδών (PDF).
-- Αναλύστε διεξοδικά τεχνολογίες και έννοιες (όχι μόνο keywords).
-- Αναφέρετε πάντα τα προαπαιτούμενα για τεχνικές κατευθύνσεις.
-- Απαντάτε πάντα στη γλώσσα του φοιτητή (Ελληνικά ή Αγγλικά).
-- Όταν η ερώτηση αφορά **γενικά πεδία / κατευθύνσεις** (π.χ. Τεχνητή Νοημοσύνη, Δίκτυα, Προγραμματισμός), **πάντα** ψάξε για **όλα τα σχετικά μαθήματα** και **λίσταρέ τα** με σύντομη περιγραφή, ακόμα κι αν χρειαστεί να κάνεις πολλαπλά queries ή να χρησιμοποιήσεις και τα δύο tools.
-- Μην περιορίζεσαι σε 1–2 μαθήματα — στόχος είναι **πλήρης εικόνα** του τι προσφέρει το τμήμα στο συγκεκριμένο πεδίο.
-"""
-agent = FunctionAgent(
-    name="DIT_Advisor",
-    description="Official Academic Advisor AI for the Informatics Department.",
-    system_prompt=advisor_system_prompt,
-    tools=[semantic_search_tool, filtered_search_tool],
-    llm=llm,
-)
-
-async def chat_loop():
-    print("==================================================")
-    print("DIT UoP Academic Advisor AI (Workflow Mode)")
-    print("Type 'exit' or 'quit' to terminate the session.")
-    print("==================================================")
-    
-    while True:
-        try:
-            user_input = input("\nStudent: ")
-            
-            if user_input.lower() in ['exit', 'quit']:
-                print("\nAdvisor: Good luck with your studies! Goodbye.")
-                break
-                
-            if not user_input.strip():
-                continue
-                
-            print("\nThinking...")
-            
-            response = await agent.run(user_msg=user_input)
-            
-            print(f"\nAdvisor: {str(response)}")
-            
-        except KeyboardInterrupt:
-            print("\n\nAdvisor: Session interrupted. Goodbye!")
-            break
-        except Exception as e:
-            print(f"\n[Error]: An unexpected error occurred: {e}")
-
-if __name__ == "__main__":
-    
-    asyncio.run(chat_loop())
